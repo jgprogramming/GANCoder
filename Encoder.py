@@ -1,6 +1,8 @@
 import tensorflow as tf
 from tqdm import tqdm
 import numpy as np
+import matplotlib.pyplot as plt
+import itertools
 
 class Encoder:
   
@@ -19,11 +21,14 @@ class Encoder:
   z = None
   
   gen = None
-  gen_binary = None
   dec = None
+  message_fixed = None
+  noise_fixed = None
   
   def __init__(self, session, message_size=60, batch_size = 512, noise_multiplier=1):
     
+    self.message_fixed = (random_message_sample((16, message_size, 1, 1)) - 0.5) * 2
+    self.noise_fixed = (random_message_sample((16, message_size, 1, 1)) - 0.5) * 2
     self.session = session
     self.message_size = message_size
     self.batch_size = batch_size
@@ -45,11 +50,10 @@ class Encoder:
     self.isTrain = isTrain
     
     # generator - fake
-    bin_G_z, G_z = self.generator(message, z, isTrain)
-    DEC_g = self.decoder(bin_G_z, isTrain)
+    G_z = self.generator(message, z, isTrain)
+    DEC_g = self.decoder(G_z, isTrain)
 
     self.gen = G_z
-    self.gen_binary = bin_G_z
     self.dec = DEC_g
     
     # discriminator - real
@@ -79,89 +83,29 @@ class Encoder:
         self.G_optim = tf.train.AdamOptimizer(lr, beta1=0.4).minimize(G_loss, var_list=G_vars)
         self.DEC_optim = tf.train.AdamOptimizer(lr, beta1=0.4).minimize(DEC_loss, var_list=G_vars)
   
+    init = tf.global_variables_initializer()
+    self.session.run(init)
+  
   def train(self, train_data, epochs=1):
     sess = self.session
-    init = tf.global_variables_initializer()
-    sess.run(init)
-    for epoch in tqdm(range(epochs)):
+    for epoch in range(epochs):
       for iter in range(len(train_data) // self.batch_size):
           x_ = train_data[iter*self.batch_size:(iter+1)*self.batch_size]
-          message_ = (np.random.randint(2, size=[self.batch_size, self.message_size, 1, 1]) - 0.5) * 2
+          message_ = (random_message_sample((self.batch_size, self.message_size, 1, 1)) - 0.5) * 2
           z_ = np.random.normal(0, 1, (self.batch_size, self.message_size*self.noise_multiplier, 1, 1))
           
           # discriminator
           sess.run([self.D_optim], {self.x: x_, self.message: message_, self.z: z_, self.isTrain: True})
 
           # generator
-          message_ = (np.random.randint(2, size=[self.batch_size, self.message_size, 1, 1]) - 0.5) * 2
+          message_ = (random_message_sample((self.batch_size, self.message_size, 1, 1)) - 0.5) * 2
           z_ = np.random.normal(0, 1, (self.batch_size, self.message_size*self.noise_multiplier, 1, 1))
           sess.run([self.G_optim], {self.x: x_, self.message: message_, self.z: z_, self.isTrain: True})
 
-          
           # encoder
-          message_ = (np.random.randint(2, size=[self.batch_size, self.message_size, 1, 1]) - 0.5) * 2
+          message_ = (random_message_sample((self.batch_size, self.message_size, 1, 1)) - 0.5) * 2
           z_ = np.random.normal(0, 1, (self.batch_size, self.message_size*self.noise_multiplier, 1, 1))
           sess.run([self.DEC_optim], {self.x: x_, self.message: message_, self.z: z_, self.isTrain: True})
-
-  def encode(self, message, tries=20):
-    sess = self.session
-    
-    message = np.repeat(message, tries, axis=0)
-    z_ = np.random.normal(0, 1, (np.shape(message)[0], self.message_size*self.noise_multiplier, 1, 1))
-    gen, binary = sess.run([self.gen, self.gen_binary ], { self.message: message,self.z: z_, self.isTrain: False})
-    
-    decoded = self.decode(binary)
-    
-    message = np.reshape(message, [-1, self.message_size])
-    decoded = np.reshape(decoded, [-1, self.message_size])
-    try:
-      index = np.where(np.all(np.equal(message, decoded), axis = 1)==True)[0][0]
-      return [gen[index]], [binary[index]], [True]
-    except:
-      return [gen[0]], [binary[0]], [False]
-    
-    
-  def encodeString(self, string, tries=1000):
-    
-    images = []
-    binaries = []
-    bits = tobits(string)
-    chunks = int(np.ceil(len(bits) / self.message_size))    
-    bits = np.pad(bits, (0, self.message_size * chunks) , 'constant', constant_values=(0, 0))
-    
-    for i in range(chunks):
-      encode_chunk = bits[self.message_size*i:self.message_size*(i+1)]
-      encode_chunk = (encode_chunk * 2) - 1
-      encode_chunk = np.reshape(encode_chunk, [1, self.message_size, 1, 1])
-      found = False
-      while not found:
-        image_, binary_, f = self.encode(encode_chunk, tries=tries)
-        image_ = np.reshape(image_[0], [32, 32])
-        if f[0]:
-          found = f[0]
-          images += [image_]
-          binaries += [binary_]
-          print("chunk " + str(i+1) + "/" + str(chunks) + " encoded")
-        else:
-          print("encoding failed, retrying chunk " + str(i+1))
-    return images, binaries
-  
-  def decodeString(self, images):
-    codes = []
-    for image_ in images:
-      image = np.reshape(image_, [1, 32, 32, 1])
-      code = np.reshape(self.decode(image), [self.message_size])
-      codes.extend(code)
-      
-    codes = [int((i+1)/2) for i in codes]
-    return frombits(codes)
-    
-    
-  def decode(self, image):
-    sess = self.session
-    x = tf.placeholder(tf.float32, shape=(None, 32, 32, 1))
-    
-    return sess.run(self.decoder(x, False, True), {x: image})
     
   def save(self, filename):
     sess = self.session
@@ -176,7 +120,7 @@ class Encoder:
   def generator(self, message, noise, isTrain=True, reuse=False):
       with tf.variable_scope('generator', reuse=reuse):
           x = tf.reshape(tf.contrib.layers.flatten(tf.concat([tf.cast(message, tf.float32), tf.cast(noise, tf.float32)],1)), [-1, 1, 1, self.message_size + self.message_size*self.noise_multiplier])
-          
+
           conv1 = tf.layers.conv2d_transpose(x, 512, [4, 4], strides=(2, 2), padding='valid')
           lrelu1 = tf.nn.leaky_relu(tf.layers.batch_normalization(conv1, training=isTrain))
 
@@ -188,8 +132,8 @@ class Encoder:
 
           conv4 = tf.layers.conv2d_transpose(lrelu3, 1, [4, 4], strides=(2, 2), padding='same')
           out = tf.nn.tanh(conv4)
-          
-          return binarize(out), out
+
+          return out
     
   def decoder(self, input_batch, isTrain=True, reuse=False):
       with tf.variable_scope('decoder', reuse=reuse):
@@ -204,7 +148,7 @@ class Encoder:
 
           dense1 = tf.layers.dense(tf.contrib.layers.flatten(lrelu3), self.message_size, activation=tf.nn.leaky_relu)    
           out = tf.nn.tanh(dense1)
-          return binarize(tf.reshape(out, shape=[-1, self.message_size, 1, 1]))
+          return tf.reshape(out, shape=[-1, self.message_size, 1, 1])
     
   def discriminator(self, x, isTrain=True, reuse=False):
       with tf.variable_scope('discriminator', reuse=reuse):
@@ -221,23 +165,52 @@ class Encoder:
           out = tf.nn.sigmoid(conv4)
 
           return out, conv4
+        
+        
+  def test(self, epoch, sample = 10000):
     
-def binarize(x):
-    g = tf.get_default_graph()
-    with g.gradient_override_map({"Sign": "Identity"}):
-        return tf.sign(x)
-      
-def tobits(s):
-    result = []
-    for c in s:
-        bits = bin(ord(c))[2:]
-        bits = '00000000'[len(bits):] + bits
-        result.extend([int(b) for b in bits])
-    return result
+    test_images = self.session.run(self.gen, { self.message: self.message_fixed, self.z: self.noise_fixed, self.isTrain: False})
+    size_figure_grid = 4
+    fig, ax = plt.subplots(size_figure_grid, size_figure_grid, figsize=(4, 4))
+    for i, j in itertools.product(range(size_figure_grid), range(size_figure_grid)):
+        ax[i, j].get_xaxis().set_visible(False)
+        ax[i, j].get_yaxis().set_visible(False)
 
-def frombits(bits):
-    chars = []
-    for b in range(len(bits) // 8):
-        byte = bits[b*8:(b+1)*8]
-        chars.append(chr(int(''.join([str(bit) for bit in byte]), 2)))
-    return ''.join(chars)
+    for k in range(size_figure_grid*size_figure_grid):
+        i = k // size_figure_grid
+        j = k % size_figure_grid
+        ax[i, j].cla()
+        ax[i, j].imshow(np.reshape(test_images[k], (32, 32)).T, cmap='gray')
+
+    message = (random_message_sample((sample, self.message_size, 1, 1)) - 0.5) * 2
+    noise = (random_message_sample((sample, self.message_size, 1, 1)) - 0.5) * 2
+
+    output_m = self.decoder(self.gen, False, True)
+    
+    out_m_ = self.session.run(output_m, { self.message: message, self.z: noise, self.isTrain: False})
+    
+    out_m_ = np.reshape(np.where(out_m_>0, 1, -1), (sample, self.message_size))
+    
+    acc = np.sum(np.all(out_m_ == np.reshape(message, (sample, self.message_size)), axis=1)) / sample
+    
+    label = 'Epoch: ' + str(epoch) + ", decode accuracy: " + str(acc)
+    fig.text(0.5, 0.04, label, ha='center')
+    return acc, fig
+
+
+import random
+def random_message_sample(shape=None):
+  leng = shape[0]
+  point_shape = shape[1:]
+  out = []
+  for i in range(0, leng):
+    x = randbitlist(point_shape[0] * point_shape[1] * point_shape[2])
+    out.append(np.reshape(x, point_shape))
+  return np.array(out)
+  
+def randbitlist(n):
+    n_on = random.randint(0, n)
+    n_off = n - n_on
+    result = [1]*n_on + [0]*n_off
+    random.shuffle(result)
+    return result

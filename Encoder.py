@@ -28,7 +28,7 @@ class Encoder:
   def __init__(self, session, message_size=60, batch_size = 512, noise_multiplier=1):
     
     self.message_fixed = (random_message_sample((16, message_size, 1, 1)) - 0.5) * 2
-    self.noise_fixed = (random_message_sample((16, message_size, 1, 1)) - 0.5) * 2
+    self.noise_fixed = np.random.normal(0, 1, (16, message_size*noise_multiplier, 1, 1))
     self.session = session
     self.message_size = message_size
     self.batch_size = batch_size
@@ -146,10 +146,9 @@ class Encoder:
           conv3 = tf.layers.conv2d(lrelu2, 512, [4, 4], strides=(2, 2), padding='same')
           lrelu3 = tf.nn.leaky_relu(tf.layers.batch_normalization(conv3, training=isTrain))
 
-          dense1 = tf.layers.dense(tf.contrib.layers.flatten(lrelu3), self.message_size, activation=tf.nn.leaky_relu)    
-          out = tf.nn.tanh(dense1)
+          out = tf.layers.dense(tf.contrib.layers.flatten(lrelu3), self.message_size, activation=tf.nn.tanh)    
           return tf.reshape(out, shape=[-1, self.message_size, 1, 1])
-    
+      
   def discriminator(self, x, isTrain=True, reuse=False):
       with tf.variable_scope('discriminator', reuse=reuse):
           conv1 = tf.layers.conv2d(x, 128, [4, 4], strides=(2, 2), padding='same')
@@ -166,7 +165,10 @@ class Encoder:
 
           return out, conv4
         
-        
+
+  def encode(self, message):   
+    self.session.run(self.gen, { self.message: self.message_fixed, self.z: self.noise_fixed, self.isTrain: False})
+    
   def test(self, epoch, sample = 10000):
     
     test_images = self.session.run(self.gen, { self.message: self.message_fixed, self.z: self.noise_fixed, self.isTrain: False})
@@ -198,6 +200,22 @@ class Encoder:
     return acc, fig
 
 
+  
+def tobits(s):
+    result = []
+    for c in s:
+        bits = bin(ord(c))[2:]
+        bits = '00000000'[len(bits):] + bits
+        result.extend([int(b) for b in bits])
+    return result
+
+def frombits(bits):
+    chars = []
+    for b in range(len(bits) // 8):
+        byte = bits[b*8:(b+1)*8]
+        chars.append(chr(int(''.join([str(bit) for bit in byte]), 2)))
+    return ''.join(chars)
+  
 import random
 def random_message_sample(shape=None):
   leng = shape[0]

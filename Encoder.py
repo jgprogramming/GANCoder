@@ -166,9 +166,17 @@ class Encoder:
           return out, conv4
         
 
-  def encode(self, message):   
-    self.session.run(self.gen, { self.message: self.message_fixed, self.z: self.noise_fixed, self.isTrain: False})
-    
+  def encode(self, message):
+    noise = np.random.normal(0, 1, (len(message), self.message_size*self.noise_multiplier, 1, 1))
+    return self.session.run(self.gen, { self.message: message, self.z: noise, self.isTrain: False})
+
+  def encode(self, message, noise):
+    return self.session.run(self.gen, { self.message: message, self.z: noise, self.isTrain: False})
+ 
+  def decode(self, image):
+    dec = self.decoder(image, False, True)
+    return self.session.run(dec)
+  
   def test(self, epoch, sample = 10000):
     
     test_images = self.session.run(self.gen, { self.message: self.message_fixed, self.z: self.noise_fixed, self.isTrain: False})
